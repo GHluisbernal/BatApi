@@ -1,0 +1,114 @@
+service: BatServerlessApi
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  region: ${opt:region, 'us-east-1'}
+  # runtime: dotnet6
+  # architecture: x86_64
+  stage: ${opt:stage, 'dev'}
+  # environment:
+  #   AUCTION_TABLE_NAME: ${self:custom.AuctionTable.name}
+  ecr:
+    images:
+      get_sessions:
+        path: ./
+        file: Dockerfile
+        buildArgs:
+          functionFolder: BatServerless.Function.Session
+  # iam:
+  #   role:
+  #     statements:
+  #       - ${file(iam/SessionTableIAM.yml):SessionTableIAM}
+
+package:
+  individually: true
+
+# custom:
+#   SessionTable:
+#     name: !Ref SessionTable
+#     arn: !GetAtt SessionTable.Arn
+   
+  Resources:
+    CognitoUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: ${self:provider.stage}-bat-user-pool
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+    CognitoUserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+          ClientName: ${self:provider.stage}-bat-user-pool-client
+          UserPoolId:
+            Ref: CognitoUserPool
+          # ExplicitAuthFlows:
+          #   - ALLOW_ADMIN_USER_PASSWORD_AUTH
+          GenerateSecret: false
+    # SessionTable: ${file(resources/SessionTable.yml):SessionTable}
+    BatDatabase:
+      Type: AWS::RDS::DBCluster
+      Properties:
+        DBClusterParameterGroupName: 
+          Ref: RDSDBClusterParameterGroup
+        DBSubnetGroupName: 
+          Ref: DBSubnetGroup
+        Engine: aurora-postgresql
+        EngineMode: serverless
+        # EngineVersion: 10.7
+        MasterUsername: ${opt:dbUsername, 'bat'}
+        MasterUserPassword: ${opt:dbPassword, 'Link0713'}
+        # PreferredBackupWindow: 05:00-06:00
+        # PreferredMaintenanceWindow: Mon:05:00-Mon:06:00
+        ScalingConfiguration:
+          AutoPause: true
+          MaxCapacity: 2
+          MinCapacity: 2
+          SecondsUntilAutoPause: 3600
+        StorageEncrypted: true
+        # VpcSecurityGroupIds:
+        #   - ${opt:dbSecurityGroupId, 'sg-0b8f8f8f8f8f8f8f8'}
+        # DBSubnetGroupName: ${opt:dbSubnetGroupName, 'bat-db-subnet-group'}
+        # DatabaseName: bat-${self:provider.stage}
+        Tags:
+          - Key: Name
+            Value: bat-${self:provider.stage}
+          - Key: Environment
+            Value: ${self:provider.stage}
+        # EnableCloudwatchLogsExports:
+        #   - ALL
+        EnableIAMDatabaseAuthentication: false
+        # EnablePerformanceInsights: true
+        # PerformanceInsightsKMSKeyId: ${opt:performanceInsightsKMSKeyId, 'alias/aws
+        # PerformanceInsightsRetentionPeriod: 1
+    RDSDBClusterParameterGroup:
+      Type: "AWS::RDS::DBClusterParameterGroup"
+      Properties: 
+        Description: "CloudFormation Sample Aurora Cluster Parameter Group"
+        Family: aurora-postgresql14
+        Parameters: 
+          time_zone: US/Eastern
+    RDSDBParameterGroup:
+      Type: 'AWS::RDS::DBParameterGroup'
+      Properties:
+        Description: CloudFormation Sample Aurora Parameter Group
+        Family: aurora-postgresql14
+        Parameters:
+          sql_mode: IGNORE_SPACE
+          max_allowed_packet: 1024
+          innodb_buffer_pool_size: '{DBInstanceClassMemory*3/4}'
+
+functions:
+  getSessions:
+    environment:
+      STAGE: ${ssm:/database/${self:provider.stage}/endpoint}
+    image:
+      name: get_sessions
+      command:
+        - "BatServerless.Function.Session::BatServerless.Function.Session.Function::Handler"
+    events:
+      - httpApi:
+          method: get
+          path: /sessions
